@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:camel="http://camel.apache.org/schema/spring"
+       xsi:schemaLocation="
+       http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+       http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring.xsd">
+
+    <!--
+        run the app: sudo mvn camel:run -Dorg.apache.camel.jmx.createRmiConnector=True
+        jConsole url: service:jmx:rmi:///jndi/rmi://localhost:1099/jmxrmi/camel
+    -->
+
+    <bean id="jmxMetricReader" class="com.ofbizian.camel.monitoring.JMXMetricReader" />
+    <bean id="tweetAnalyzer" class="com.ofbizian.camel.monitoring.TweetAnalyzer" />
+
+    <camel:camelContext xmlns="http://camel.apache.org/schema/spring" managementNamePattern="#name#" id="monitorContext">
+
+        <propertyPlaceholder id="properties" location="twitter.properties"/>
+
+        <camel:route id="processingRoute">
+            <camel:from uri="twitter://streaming/filter?type=event&amp;keywords={{twitter.searchTerm}}&amp;accessToken={{twitter.accessToken}}&amp;accessTokenSecret={{twitter.accessTokenSecret}}&amp;consumerKey={{twitter.consumerKey}}&amp;consumerSecret={{twitter.consumerSecret}}"/>
+
+            <process ref="tweetAnalyzer" />
+
+            <camel:to uri="log:com.ofbizian.camel.monitoring?level=DEBUG&amp;showAll=true&amp;multiline=true"/>
+        </camel:route>
+
+        <camel:route>
+            <camel:from uri="jmx:platform?objectDomain=org.apache.camel&amp;monitorType=counter&amp;differenceMode=false&amp;key.context=MC-SS071464.local/monitorContext&amp;key.type=routes&amp;key.name=%22processingRoute%22&amp;observedAttribute=ExchangesCompleted&amp;initThreshold=1&amp;granularityPeriod=5000&amp;offset=1&amp;format=raw"/>
+
+            <camel:to uri="log:com.ofbizian.camel.monitoring?level=INFO&amp;showAll=true&amp;multiline=true"/>
+
+            <setHeader headerName="CamelAwsCwMetricName">
+                <simple>${body.observedAttribute}</simple>
+            </setHeader>
+            <setHeader headerName="CamelAwsCwMetricValue">
+                <simple>${body.derivedGauge}</simple>
+            </setHeader>
+            <setHeader headerName="CamelAwsCwMetricUnit">
+                <constant>Count</constant>
+            </setHeader>
+
+            <camel:to uri="log:com.ofbizian.camel.monitoring?level=INFO&amp;showAll=true&amp;multiline=true"/>
+
+            <camel:to uri="aws-cw://www.livephotostream.com/live?accessKey=XXX&amp;secretKey=XXX&amp;amazonCwEndpoint=monitoring.eu-west-1.amazonaws.com"/>
+        </camel:route>
+
+        <route>
+            <from uri="timer://jmxMonitoringTimer?fixedRate=true&amp;period=10000"/>
+
+            <process ref="jmxMetricReader" />
+
+            <camel:to uri="log:com.ofbizian.camel.monitoring?level=INFO&amp;showAll=true&amp;multiline=true"/>
+
+            <camel:to uri="aws-cw://www.livephotostream.com/context?accessKey=XXX&amp;secretKey=XXX&amp;amazonCwEndpoint=monitoring.eu-west-1.amazonaws.com"/>
+        </route>
+    </camel:camelContext>
+</beans>
